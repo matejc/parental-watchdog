@@ -1,0 +1,13 @@
+[Unit]
+Description=Watch‑dog that kills myapp after specific time per user
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/matejc/workarea/watchdog/xapp-watchdog.sh 'sahiru' 'steamapps|PrismLauncher|\.exe|/proc/self/exe --' 'YouTube'
+Restart=always
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

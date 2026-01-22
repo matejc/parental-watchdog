@@ -1,0 +1,13 @@
+[Unit]
+Description=Parental control app
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/parental-watchdog --user kid --cmd-pattern 'steamapps|PrismLauncher|\.exe' --title-pattern '^Sober$|YouTube' --backend kdotool
+Restart=always
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
