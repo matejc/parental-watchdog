@@ -48,11 +48,11 @@ struct Args {
 
     /// Regex that must match the command name
     #[arg(long, value_name = "REGEX")]
-    cmd_pattern: String,
+    cmd_pattern: Option<String>,
 
     /// Regex that must match the window title
     #[arg(long, value_name = "REGEX")]
-    title_pattern: String,
+    title_pattern: Option<String>,
 
     /// Which backend to use: "kdotool" or "niri"
     #[arg(short, long, default_value = "kdotool")]
@@ -94,38 +94,94 @@ fn save_apps(path: &PathBuf, apps: &HashMap<String, u64>) -> Result<()> {
     Ok(())
 }
 
-fn sum_seconds(apps: &HashMap<String, u64>) -> u64 {
-    // Build the suffix we need to match – e.g. "2026-01-18"
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+fn parse_key(key: &str) -> Option<(String, u64, String)> {
+    // Returns (app_name, start_epoch, date_str) if the key matches our pattern
+    let mut parts = key.split(':');
 
-    apps.iter()
-        .filter(|(k, _)| {
-            // Fast‑path: the key must start with the literal prefix
-            if !k.starts_with("seconds:") {
-                return false;
+    // Expected layout: seconds : <app> : <pid> : <start_epoch> : <date>
+    match (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) {
+        (Some("app"), Some(app), Some(_pid), Some(start_str), Some(date)) => {
+            if let Ok(start) = start_str.parse::<u64>() {
+                Some((app.to_string(), start, date.to_string()))
+            } else {
+                None
             }
-
-            let mut parts = k.split(':');
-            match (parts.next(), parts.next(), parts.next(), parts.next()) {
-                (Some("seconds"), Some(_), Some(_), Some(date_part)) => date_part == today,
-                _ => false,
-            }
-        })
-        // Sum the values that passed the filter
-        .map(|(_, v)| *v)
-        .sum()
+        }
+        _ => None,
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Core logic: given a PID, fetch its elapsed time, command name and full command line,
-// then decide whether to store / warn / kill.
+fn merge_intervals(mut intervals: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+    if intervals.is_empty() {
+        return intervals;
+    }
+
+    intervals.sort_unstable_by_key(|&(s, _)| s);
+
+    let mut merged = Vec::with_capacity(intervals.len());
+    let mut cur = intervals[0];
+
+    for &(s, e) in intervals.iter().skip(1) {
+        if s > cur.1 {
+            // No overlap – push the finished interval
+            merged.push(cur);
+            cur = (s, e);
+        } else {
+            // Overlap – extend the current interval
+            if e > cur.1 {
+                cur.1 = e;
+            }
+        }
+    }
+    merged.push(cur);
+    merged
+}
+
+fn sum_seconds_for_today(apps: &HashMap<String, u64>) -> u64 {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    let mut intervals: Vec<(u64, u64)> = Vec::new();
+
+    for (key, &etime) in apps.iter() {
+        if !key.starts_with("app:") {
+            continue;
+        }
+
+        // Parse the key – we need app name, start epoch, and the date part
+        if let Some((_app, start_epoch, date_part)) = parse_key(key) {
+            if date_part == today {
+                // Build the interval: [start, start + etime)
+                let end = start_epoch.saturating_add(etime);
+                intervals.push((start_epoch, end));
+            }
+        }
+    }
+
+    let merged = merge_intervals(intervals);
+
+    merged.iter().map(|&(s, e)| e - s).sum()
+}
+
+fn matches_rx(str: &str, regex_opt: &Option<Regex>) -> bool {
+    match regex_opt {
+        Some(re) => re.is_match(str),
+        None => false,
+    }
+}
+
 fn add_to_apps(
     user: &str,
     apps: &mut HashMap<String, u64>,
     apps_path: &PathBuf,
     pid: u32,
-    cmd_rx: &Regex,
-    title_rx: &Regex,
+    cmd_rx: &Option<Regex>,
+    title_rx: &Option<Regex>,
     title: &str,
     limit: u64,
     warn_before: u64,
@@ -155,20 +211,18 @@ fn add_to_apps(
     // The rest of the command line is ignored for our matching needs.
     let seconds: u64 = secs_str.parse()?;
 
-    let match_cmd = match cmd_rx.is_match(&command) {
-        true => {
-            println!("Matched by cmd: {command}");
-            true
-        }
-        false => false,
+    let match_cmd = if matches_rx(&command, cmd_rx) {
+        println!("Matched by cmd: {command}");
+        true
+    } else {
+        false
     };
 
-    let match_title = match title_rx.is_match(title) {
-        true => {
-            println!("Matched by title: {title}");
-            true
-        }
-        false => false,
+    let match_title = if matches_rx(title, title_rx) {
+        println!("Matched by title: {title}");
+        true
+    } else {
+        false
     };
 
     if !match_cmd && !match_title {
@@ -177,7 +231,11 @@ fn add_to_apps(
 
     // Build a deterministic key: "<comm>:<pid>:<YYYY‑MM‑DD>"
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let key = format!("seconds:{comm}:{pid}:{today}");
+    let start_at = chrono::Local::now()
+        .timestamp()
+        .saturating_sub_unsigned(seconds);
+
+    let key = format!("app:{comm}:{pid}:{start_at}:{today}");
 
     let entry = match apps.get_mut(&key) {
         None => {
@@ -193,7 +251,7 @@ fn add_to_apps(
         }
     };
 
-    let total = sum_seconds(apps);
+    let total = sum_seconds_for_today(apps);
     println!("App: {key} => {entry} ({total}/{limit})");
     let _ = save_apps(apps_path, apps);
 
@@ -213,8 +271,6 @@ fn add_to_apps(
     Ok(true)
 }
 
-// ---------------------------------------------------------------------------
-// Program entry point.
 fn main() -> Result<()> {
     let args = Args::parse();
     let lister = make_lister(args.backend);
@@ -231,23 +287,23 @@ fn main() -> Result<()> {
     // Load existing data.
     let mut apps = load_apps(&apps_path)?;
 
-    let cmd_regex = match Regex::new(&args.cmd_pattern) {
-        Ok(rx) => rx,
-        Err(err) => panic!("Problem with cmd_regex: {err:?}"),
-    };
-    let title_regex = match Regex::new(&args.title_pattern) {
-        Ok(rx) => rx,
-        Err(err) => panic!("Problem with title_regex: {err:?}"),
-    };
+    let cmd_regex: Option<Regex> = args.cmd_pattern.as_ref().map(|pat| {
+        Regex::new(pat).unwrap_or_else(|err| {
+            panic!("Problem compiling cmd pattern `{}`: {err:?}", pat);
+        })
+    });
+    let title_regex: Option<Regex> = args.title_pattern.as_ref().map(|pat| {
+        Regex::new(pat).unwrap_or_else(|err| {
+            panic!("Problem compiling title pattern `{}`: {err:?}", pat);
+        })
+    });
 
-    // -----------------------------------------------------------------------
-    // Main monitoring loop.
     let mut warned = String::from(""); // remember whether we already sent the warning
     loop {
         match lister.list_windows(&args.user) {
             Ok(windows) => {
                 for win in windows {
-                    if add_to_apps(
+                    add_to_apps(
                         &args.user,
                         &mut apps,
                         &apps_path,
@@ -258,9 +314,7 @@ fn main() -> Result<()> {
                         args.limit,
                         args.warn_before,
                         &mut warned,
-                    )? {
-                        break; // save only first window
-                    }
+                    )?;
                 }
             }
             Err(e) => eprintln!("Error retrieving windows: {}", e),
