@@ -42,7 +42,7 @@ struct Args {
     #[arg(long, default_value_t = 10)]
     interval: u64,
 
-    /// Path to the persistent apps file (default $HOME/.local/share/parental-watchdog)
+    /// Path to the persistent apps file (default $HOME/.local/state/parental-watchdog)
     #[arg(long, short = 'f', default_value = "")]
     apps_file: String,
 

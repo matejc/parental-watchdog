@@ -20,7 +20,10 @@ pub struct KdotoolLister;
 
 impl WindowLister for KdotoolLister {
     fn list_windows(&self, user: &str) -> io::Result<Vec<WindowInfo>> {
-        let output = run_as_user(user, &["kdotool", "search", "--name", "."]).unwrap();
+        let output = run_as_user(user, &["kdotool", "search", "--name", "."]).unwrap_or_else(|e| {
+            eprintln!("failed to execute kdotool: {}", e);
+            String::default()
+        });
 
         let mut result = Vec::new();
         for win_id in output.lines() {
@@ -51,7 +54,10 @@ pub struct NiriLister;
 impl WindowLister for NiriLister {
     fn list_windows(&self, user: &str) -> io::Result<Vec<WindowInfo>> {
         // `niri msg windows` returns JSON describing each window.
-        let output = run_as_user(user, &["niri", "msg", "-j", "windows"]).unwrap();
+        let output = run_as_user(user, &["niri", "msg", "-j", "windows"]).unwrap_or_else(|e| {
+            eprintln!("failed to execute niri: {}", e);
+            String::default()
+        });
 
         #[derive(serde::Deserialize)]
         struct NiriWindow {
