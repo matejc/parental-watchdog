@@ -54,7 +54,7 @@ struct Args {
     #[arg(long, value_name = "REGEX")]
     title_pattern: Option<String>,
 
-    /// Which backend to use: "kdotool" or "niri"
+    /// Which backend to use: "kdotool", "niri" or "xdotool"
     #[arg(short, long, default_value = "kdotool")]
     backend: backend::Backend,
 }

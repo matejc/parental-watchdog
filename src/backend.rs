@@ -82,15 +82,50 @@ impl WindowLister for NiriLister {
     }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Implementation for xdotool                                                */
+/* -------------------------------------------------------------------------- */
+pub struct XdotoolLister;
+
+impl WindowLister for XdotoolLister {
+    fn list_windows(&self, user: &str) -> io::Result<Vec<WindowInfo>> {
+        let output = run_as_user(user, &["xdotool", "search", "--onlyvisible", "--name", "."]).unwrap_or_else(|e| {
+            eprintln!("failed to execute xdotool: {}", e);
+            String::default()
+        });
+
+        let mut result = Vec::new();
+        for win_id in output.lines() {
+            // Resolve the real PID belonging to the window.
+            let pid_str = run_as_user(&user, &["xdotool", "getwindowpid", win_id]).unwrap();
+            let pid: u32 = match pid_str.trim().parse() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            // Obtain the (potentially refreshed) window title.
+            let title = run_as_user(&user, &["xdotool", "getwindowname", win_id]).unwrap();
+
+            result.push(WindowInfo {
+                title: title.trim().to_string(),
+                pid,
+            });
+        }
+        Ok(result)
+    }
+}
+
 #[derive(Clone, Debug, clap::ValueEnum)]
 pub enum Backend {
     Kdotool,
     Niri,
+    Xdotool,
 }
 
 pub fn make_lister(backend: Backend) -> Box<dyn WindowLister> {
     match backend {
         Backend::Kdotool => Box::new(KdotoolLister),
         Backend::Niri => Box::new(NiriLister),
+        Backend::Xdotool => Box::new(XdotoolLister),
     }
 }

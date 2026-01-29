@@ -2,7 +2,7 @@
 
 Parental control service for tracking open windows (by command line pattern and/or by title pattern) and terminating them when the daily time limit is up.
 
-Warning: currently supports only KDE via kdotool, but new backends can be added in the future.
+Warning: currently supports KDE via kdotool and X11 via xdotool, but new backends can be added in the future.
 
 Note: niri window manager is partially supported due to all X11 windows being detected as xwayland-satellite, so after time limit, all X11 including xwayland-satellite will be terminated.
 
@@ -18,9 +18,10 @@ Note:
 
 ## Runtime dependencies
 
-- Commands (you likely already have): runuser, ps
-- Command: notify-send
-- [kdotool](https://github.com/jinliu/kdotool) for KDE support
+- Commands (you likely already have installed): runuser, ps
+- Command: notify-send - for sending the warning message
+- [kdotool](https://github.com/jinliu/kdotool) - for KDE support
+- xdotool - for X11 support
 
 
 ## Build
