@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::NaiveTime;
 use clap::{ArgGroup, Parser};
 use regex::Regex;
 use std::{
@@ -11,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{backend::make_lister, misc::run_command, misc::send_stop_warning};
+use crate::{backend::make_lister, misc::{fmt_time, run_command, send_stop_warning}};
 pub mod backend;
 pub mod misc;
 
@@ -32,11 +33,11 @@ struct Args {
 
     /// Hard time‑limit in seconds (default 7200 ≈ 2 h)
     #[arg(long, default_value_t = 7200)]
-    limit: u64,
+    limit: i64,
 
     /// Seconds before the limit when a warning is shown (default 900 ≈ 15 min)
     #[arg(long, default_value_t = 900)]
-    warn_before: u64,
+    warn_before: i64,
 
     /// Interval between scans, in seconds
     #[arg(long, default_value_t = 10)]
@@ -57,11 +58,19 @@ struct Args {
     /// Which backend to use: "kdotool", "niri" or "xdotool"
     #[arg(short, long, default_value = "kdotool")]
     backend: backend::Backend,
+
+    /// Begin time for the day (outside of the begin and end time, windows with patterns will be terminated immediately)
+    #[arg(long, default_value = "12:00")]
+    time_begin: String,
+
+    /// End time for the day
+    #[arg(long, default_value = "21:00")]
+    time_end: String,
 }
 
 // ---------------------------------------------------------------------------
 // Load persisted `<key> <seconds>` pairs from the apps file.
-fn load_apps(path: &PathBuf) -> Result<HashMap<String, u64>> {
+fn load_apps(path: &PathBuf) -> Result<HashMap<String, i64>> {
     let mut map = HashMap::new();
 
     // Touch‑like behaviour – create an empty file if missing.
@@ -75,7 +84,7 @@ fn load_apps(path: &PathBuf) -> Result<HashMap<String, u64>> {
         let l = line?;
         let mut parts = l.splitn(2, ' ');
         if let (Some(key), Some(val_str)) = (parts.next(), parts.next()) {
-            if let Ok(val) = val_str.parse::<u64>() {
+            if let Ok(val) = val_str.parse::<i64>() {
                 map.insert(key.to_string(), val);
             }
         }
@@ -85,7 +94,7 @@ fn load_apps(path: &PathBuf) -> Result<HashMap<String, u64>> {
 
 // ---------------------------------------------------------------------------
 // Write the hashmap back to disk (overwrites the file).
-fn save_apps(path: &PathBuf, apps: &HashMap<String, u64>) -> Result<()> {
+fn save_apps(path: &PathBuf, apps: &HashMap<String, i64>) -> Result<()> {
     let mut out = String::new();
     for (k, v) in apps {
         out.push_str(&format!("{k} {v}\n"));
@@ -94,7 +103,7 @@ fn save_apps(path: &PathBuf, apps: &HashMap<String, u64>) -> Result<()> {
     Ok(())
 }
 
-fn parse_key(key: &str) -> Option<(String, u64, String)> {
+fn parse_key(key: &str) -> Option<(String, i64, String)> {
     // Returns (app_name, start_epoch, date_str) if the key matches our pattern
     let mut parts = key.split(':');
 
@@ -107,7 +116,7 @@ fn parse_key(key: &str) -> Option<(String, u64, String)> {
         parts.next(),
     ) {
         (Some("app"), Some(app), Some(_pid), Some(start_str), Some(date)) => {
-            if let Ok(start) = start_str.parse::<u64>() {
+            if let Ok(start) = start_str.parse::<i64>() {
                 Some((app.to_string(), start, date.to_string()))
             } else {
                 None
@@ -117,7 +126,7 @@ fn parse_key(key: &str) -> Option<(String, u64, String)> {
     }
 }
 
-fn merge_intervals(mut intervals: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+fn merge_intervals(mut intervals: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
     if intervals.is_empty() {
         return intervals;
     }
@@ -143,10 +152,10 @@ fn merge_intervals(mut intervals: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
     merged
 }
 
-fn sum_seconds_for_today(apps: &HashMap<String, u64>) -> u64 {
+fn sum_seconds_for_today(apps: &HashMap<String, i64>) -> i64 {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
-    let mut intervals: Vec<(u64, u64)> = Vec::new();
+    let mut intervals: Vec<(i64, i64)> = Vec::new();
 
     for (key, &etime) in apps.iter() {
         if !key.starts_with("app:") {
@@ -177,15 +186,17 @@ fn matches_rx(str: &str, regex_opt: &Option<Regex>) -> bool {
 
 fn add_to_apps(
     user: &str,
-    apps: &mut HashMap<String, u64>,
+    apps: &mut HashMap<String, i64>,
     apps_path: &PathBuf,
     pid: u32,
     cmd_rx: &Option<Regex>,
     title_rx: &Option<Regex>,
     title: &str,
-    limit: u64,
-    warn_before: u64,
+    limit: i64,
+    warn_before: i64,
     warned: &mut String,
+    time_begin: NaiveTime,
+    time_end: NaiveTime,
 ) -> Result<bool> {
     // Retrieve process info via `ps`.
     let ps_out = run_command(
@@ -209,7 +220,7 @@ fn add_to_apps(
         .ok_or_else(|| anyhow::anyhow!("missing comm from ps output"))?;
     let command: String = parts.collect::<Vec<_>>().join(" ");
     // The rest of the command line is ignored for our matching needs.
-    let seconds: u64 = secs_str.parse()?;
+    let seconds: i64 = secs_str.parse()?;
 
     let match_cmd = if matches_rx(&command, cmd_rx) {
         println!("Matched by cmd: {command}");
@@ -229,15 +240,34 @@ fn add_to_apps(
         return Ok(false);
     }
 
-    // Build a deterministic key: "<comm>:<pid>:<YYYY‑MM‑DD>"
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let start_at = chrono::Local::now()
-        .timestamp()
-        .saturating_sub_unsigned(seconds);
+    let today_date = chrono::Local::now().date_naive();
+    let today = today_date.format("%Y-%m-%d").to_string();
+    let now_epoch = chrono::Local::now().timestamp();
+    let start_at = now_epoch.saturating_sub(seconds);
+    let today_begin_epoch = today_date.and_time(time_begin).and_local_timezone(chrono::Local).single().unwrap().timestamp();
+    let today_end_epoch = today_date.and_time(time_end).and_local_timezone(chrono::Local).single().unwrap().timestamp();
 
+    if today_begin_epoch > now_epoch {
+        println!("Killing {pid}, before the begin time ({}): cmd='{comm}', title='{title}'", fmt_time(today_begin_epoch - now_epoch));
+        let _ = Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status();
+        return Ok(true);
+
+    } else if now_epoch > today_end_epoch {
+        println!("Killing {pid}, after the end time ({}): cmd='{comm}', title='{title}'", fmt_time(now_epoch - today_end_epoch));
+        let _ = Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status();
+        return Ok(true);
+    }
+
+    // Build a deterministic key: "app:<comm>:<pid>:<epoch>:<YYYY‑MM‑DD>"
     let key = format!("app:{comm}:{pid}:{start_at}:{today}");
 
-    let entry = match apps.get_mut(&key) {
+    let seconds_per_key = match apps.get_mut(&key) {
         None => {
             // No existing entry – just store the incoming seconds.
             apps.insert(key.clone(), seconds);
@@ -252,15 +282,22 @@ fn add_to_apps(
     };
 
     let total = sum_seconds_for_today(apps);
-    println!("App: {key} => {entry} ({total}/{limit})");
     let _ = save_apps(apps_path, apps);
 
+    let remaining = if (today_end_epoch - now_epoch) < limit {
+        today_end_epoch - now_epoch
+    } else {
+        limit - total
+    };
+
+    println!("App[{key} = {}]: Used {} out of {}, remaining {}", fmt_time(seconds_per_key), fmt_time(total), fmt_time(limit), fmt_time(remaining));
+
     // Warning / killing logic.
-    if total > (limit - warn_before) && total < limit && *warned != today {
-        send_stop_warning(user, limit - total)?;
+    if remaining < warn_before && *warned != today {
+        send_stop_warning(user, remaining)?;
         *warned = today;
-    } else if total >= limit {
-        println!("Killing {pid}, after {total}s reached: cmd='{comm}', title='{title}'");
+    } else if remaining < 0 {
+        println!("Killing {pid}, after {} reached: cmd='{comm}', title='{title}'", fmt_time(total));
         // Fire SIGTERM; ignore errors (process may already be gone).
         let _ = Command::new("kill")
             .arg("-TERM")
@@ -298,6 +335,14 @@ fn main() -> Result<()> {
         })
     });
 
+    let time_begin = chrono::NaiveTime::parse_from_str(&args.time_begin, "%H:%M").unwrap_or_else(|err| {
+        panic!("Parse begin time error `{}`: {err:?}", args.time_begin);
+    });
+
+    let time_end = chrono::NaiveTime::parse_from_str(&args.time_end, "%H:%M").unwrap_or_else(|err| {
+        panic!("Parse end time error `{}`: {err:?}", args.time_end);
+    });
+
     let mut warned = String::from(""); // remember whether we already sent the warning
     loop {
         match lister.list_windows(&args.user) {
@@ -314,6 +359,8 @@ fn main() -> Result<()> {
                         args.limit,
                         args.warn_before,
                         &mut warned,
+                        time_begin,
+                        time_end
                     )?;
                 }
             }

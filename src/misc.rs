@@ -34,8 +34,12 @@ pub fn run_as_user(user: &str, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub fn send_stop_warning(user: &str, remaining: u64) -> Result<()> {
-    let msg = format!("Stopping in {remaining}s");
+pub fn fmt_time(seconds: i64) -> String {
+    humantime::format_duration(std::time::Duration::from_secs(seconds as u64)).to_string()
+}
+
+pub fn send_stop_warning(user: &str, remaining: i64) -> Result<()> {
+    let msg = format!("Stopping in {}", fmt_time(remaining));
     println!("Sending warning: '{msg}' ...");
     run_as_user(user, &[NOTIFY_SEND_CMD, &msg])?;
     Ok(())
