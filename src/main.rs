@@ -284,7 +284,7 @@ fn add_to_apps(
     let total = sum_seconds_for_today(apps);
     let _ = save_apps(apps_path, apps);
 
-    let remaining = if (today_end_epoch - now_epoch) < limit {
+    let remaining = if (today_end_epoch - now_epoch) < (limit - total) {
         today_end_epoch - now_epoch
     } else {
         limit - total
