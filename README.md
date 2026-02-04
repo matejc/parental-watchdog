@@ -41,16 +41,18 @@ sudo cp -v ./target/release/parental-watchdog /usr/bin/
 Edit the `parental-watchdog.service` file to at least change username and patterns (current patterns should match Steam, Heroic, Minecraft via PrismLauncher, Sober and YouTube in the title - internet browser window).
 
 ```bash
-sudo systemctl enable --now ./parental-watchdog.service
+sudo systemctl enable --now ./examples/parental-watchdog.service
 ```
 
 Note:
-- if you need to edit the `./parental-watchdog.service`, make sure that you run `sudo systemctl daemon-reload` so that the systemd reloads the file and then do restart the service manually
+- For subsequent edits of the `./examples/parental-watchdog.service`, make sure that you run `sudo systemctl daemon-reload` so that the systemd reloads the file and then you need to restart the service manually via `sudo systemctl restart parental-watchdog.service`
 
 
 ## Usage
 
 ```
+Monitor processes/windows belonging to a given user, accumulate run‑time, warn before a configurable limit and eventually terminate the process
+
 Usage: parental-watchdog [OPTIONS] --user <USER> <--cmd-pattern <REGEX>|--title-pattern <REGEX>>
 
 Options:
@@ -58,10 +60,12 @@ Options:
       --limit <LIMIT>              Hard time‑limit in seconds (default 7200 ≈ 2 h) [default: 7200]
       --warn-before <WARN_BEFORE>  Seconds before the limit when a warning is shown (default 900 ≈ 15 min) [default: 900]
       --interval <INTERVAL>        Interval between scans, in seconds [default: 10]
-  -f, --apps-file <APPS_FILE>      Path to the persistent apps file (default $HOME/.local/share/parental-watchdog) [default: ]
+  -f, --apps-file <APPS_FILE>      Path to the persistent apps file (default $HOME/.local/state/parental-watchdog) [default: ]
       --cmd-pattern <REGEX>        Regex that must match the command name
       --title-pattern <REGEX>      Regex that must match the window title
-  -b, --backend <BACKEND>          Which backend to use: "kdotool" or "niri" [default: kdotool] [possible values: kdotool, niri]
+  -b, --backend <BACKEND>          Which backend to use: "kdotool", "niri" or "xdotool" [default: kdotool] [possible values: kdotool, niri, xdotool]
+      --time-begin <TIME_BEGIN>    Begin time for the day (outside of the begin and end time, windows with patterns will be terminated immediately) [default: 12:00]
+      --time-end <TIME_END>        End time for the day [default: 21:00]
   -h, --help                       Print help
   -V, --version                    Print version
 ```
