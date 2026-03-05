@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::NaiveTime;
-use clap::{ArgGroup, Parser};
+use clap::{ArgGroup, Parser, Subcommand};
 use regex::Regex;
 use std::{
     collections::HashMap,
@@ -20,13 +20,27 @@ pub mod misc;
 /// warn before a configurable limit and eventually terminate the process.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
+struct Args {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Run the parental watchdog monitor
+    Run(RunArgs),
+    /// Show time left for today
+    TimeUsed(TimeUsedArgs),
+}
+
+#[derive(Parser, Debug)]
 #[command(group(
     ArgGroup::new("pattern")
         .required(true)
         .args(&["cmd_pattern", "title_pattern"])
         .multiple(true)
 ))]
-struct Args {
+struct RunArgs {
     /// Username that owns the graphical session (mandatory)
     #[arg(long, short = 'u')]
     user: String,
@@ -66,6 +80,13 @@ struct Args {
     /// End time for the day
     #[arg(long, default_value = "21:00")]
     time_end: String,
+}
+
+#[derive(Parser, Debug)]
+struct TimeUsedArgs {
+    /// Path to the persistent apps file (default $HOME/.local/state/parental-watchdog)
+    #[arg(long, short = 'f', default_value = "")]
+    apps_file: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -308,8 +329,7 @@ fn add_to_apps(
     Ok(true)
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
+fn run_monitor(args: RunArgs) -> Result<()> {
     let lister = make_lister(args.backend);
 
     let apps_path = if args.apps_file.len() != 0 {
@@ -369,5 +389,31 @@ fn main() -> Result<()> {
 
         // Wait before the next scan.
         thread::sleep(Duration::from_secs(args.interval));
+    }
+}
+
+fn show_time_used(args: TimeUsedArgs) -> Result<()> {
+    let apps_path = if args.apps_file.len() != 0 {
+        PathBuf::from(args.apps_file)
+    } else {
+        let mut home = dirs::state_dir().unwrap();
+        create_dir_all(&home)?;
+        home.push("parental-watchdog");
+        home
+    };
+
+    let apps = load_apps(&apps_path)?;
+    let total = sum_seconds_for_today(&apps);
+    println!("{}", fmt_time(total));
+
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+
+    match args.command {
+        Commands::Run(run_args) => run_monitor(run_args),
+        Commands::TimeUsed(time_used_args) => show_time_used(time_used_args),
     }
 }
