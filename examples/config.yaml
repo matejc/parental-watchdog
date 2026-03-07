@@ -1,0 +1,8 @@
+user: kid
+limit: 7200
+warn_before: 900
+cmd_pattern: steamapps|PrismLauncher|.exe
+title_pattern: ^Sober$|YouTube
+backend: kdotool
+time_begin: 12:00
+time_end: 21:00
