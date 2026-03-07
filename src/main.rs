@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::NaiveTime;
-use clap::{ArgGroup, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use regex::Regex;
 use std::{
     collections::HashMap,
@@ -12,8 +12,9 @@ use std::{
     time::Duration,
 };
 
-use crate::{backend::make_lister, misc::{fmt_time, run_command, send_stop_warning}};
+use crate::{backend::make_lister, config::load_config, misc::{fmt_time, run_command, send_stop_warning}};
 pub mod backend;
+pub mod config;
 pub mod misc;
 
 /// Monitor processes/windows belonging to a given user, accumulate run‑time,
@@ -29,64 +30,39 @@ struct Args {
 enum Commands {
     /// Run the parental watchdog monitor
     Run(RunArgs),
-    /// Show time left for today
+    /// Show time used for today
     TimeUsed(TimeUsedArgs),
+    /// Show time left for today
+    TimeRemaining(TimeRemainingArgs),
 }
 
 #[derive(Parser, Debug)]
-#[command(group(
-    ArgGroup::new("pattern")
-        .required(true)
-        .args(&["cmd_pattern", "title_pattern"])
-        .multiple(true)
-))]
 struct RunArgs {
-    /// Username that owns the graphical session (mandatory)
-    #[arg(long, short = 'u')]
-    user: String,
+    /// Path to the YAML configuration file
+    #[arg(long, short = 'c')]
+    config: String,
 
-    /// Hard time‑limit in seconds (default 7200 ≈ 2 h)
-    #[arg(long, default_value_t = 7200)]
-    limit: i64,
-
-    /// Seconds before the limit when a warning is shown (default 900 ≈ 15 min)
-    #[arg(long, default_value_t = 900)]
-    warn_before: i64,
-
-    /// Interval between scans, in seconds
-    #[arg(long, default_value_t = 10)]
-    interval: u64,
-
-    /// Path to the persistent apps file (default $HOME/.local/state/parental-watchdog)
-    #[arg(long, short = 'f', default_value = "")]
-    apps_file: String,
-
-    /// Regex that must match the command name
-    #[arg(long, value_name = "REGEX")]
-    cmd_pattern: Option<String>,
-
-    /// Regex that must match the window title
-    #[arg(long, value_name = "REGEX")]
-    title_pattern: Option<String>,
-
-    /// Which backend to use: "kdotool", "niri" or "xdotool"
-    #[arg(short, long, default_value = "kdotool")]
-    backend: backend::Backend,
-
-    /// Begin time for the day (outside of the begin and end time, windows with patterns will be terminated immediately)
-    #[arg(long, default_value = "12:00")]
-    time_begin: String,
-
-    /// End time for the day
-    #[arg(long, default_value = "21:00")]
-    time_end: String,
+    /// Path to the persistent apps file
+    #[arg(long, short = 'a', default_value = "")]
+    apps_path: String,
 }
 
 #[derive(Parser, Debug)]
 struct TimeUsedArgs {
-    /// Path to the persistent apps file (default $HOME/.local/state/parental-watchdog)
-    #[arg(long, short = 'f', default_value = "")]
-    apps_file: String,
+    /// Path to the persistent apps file
+    #[arg(long, short = 'a', default_value = "")]
+    apps_path: String,
+}
+
+#[derive(Parser, Debug)]
+struct TimeRemainingArgs {
+    /// Path to the YAML configuration file
+    #[arg(long, short = 'c')]
+    config: String,
+
+    /// Path to the persistent apps file
+    #[arg(long, short = 'a', default_value = "")]
+    apps_path: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -329,55 +305,73 @@ fn add_to_apps(
     Ok(true)
 }
 
-fn run_monitor(args: RunArgs) -> Result<()> {
-    let lister = make_lister(args.backend);
-
-    let apps_path = if args.apps_file.len() != 0 {
-        PathBuf::from(args.apps_file)
+fn resolve_apps_path(apps_path: &str) -> Result<PathBuf> {
+    if !apps_path.is_empty() {
+        Ok(PathBuf::from(apps_path))
     } else {
-        let mut home = dirs::state_dir().unwrap();
-        create_dir_all(&home)?;
-        home.push("parental-watchdog");
-        home
-    };
+        let mut home_state = dirs::state_dir().ok_or_else(|| anyhow::anyhow!("Could not determine state directory"))?;
+        create_dir_all(&home_state)?;
+        home_state.push("parental-watchdog");
+        Ok(home_state)
+    }
+}
+
+fn resolve_config_path(config_path: &str) -> Result<PathBuf> {
+    if !config_path.is_empty() {
+        Ok(PathBuf::from(config_path))
+    } else {
+        let mut home_config = dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+        home_config.push("parental-watchdog");
+        home_config.push("config.yaml");
+        Ok(home_config)
+    }
+}
+
+fn run_monitor(args: RunArgs) -> Result<()> {
+    let config_path = resolve_config_path(&args.config)?;
+    let config = load_config(&config_path)?;
+
+    let lister = make_lister(config.backend);
+
+    let apps_path = resolve_apps_path(&args.apps_path)?;
 
     // Load existing data.
     let mut apps = load_apps(&apps_path)?;
 
-    let cmd_regex: Option<Regex> = args.cmd_pattern.as_ref().map(|pat| {
+    let cmd_regex: Option<Regex> = config.cmd_pattern.as_ref().map(|pat| {
         Regex::new(pat).unwrap_or_else(|err| {
             panic!("Problem compiling cmd pattern `{}`: {err:?}", pat);
         })
     });
-    let title_regex: Option<Regex> = args.title_pattern.as_ref().map(|pat| {
+    let title_regex: Option<Regex> = config.title_pattern.as_ref().map(|pat| {
         Regex::new(pat).unwrap_or_else(|err| {
             panic!("Problem compiling title pattern `{}`: {err:?}", pat);
         })
     });
 
-    let time_begin = chrono::NaiveTime::parse_from_str(&args.time_begin, "%H:%M").unwrap_or_else(|err| {
-        panic!("Parse begin time error `{}`: {err:?}", args.time_begin);
+    let time_begin = chrono::NaiveTime::parse_from_str(&config.time_begin, "%H:%M").unwrap_or_else(|err| {
+        panic!("Parse begin time error `{}`: {err:?}", config.time_begin);
     });
 
-    let time_end = chrono::NaiveTime::parse_from_str(&args.time_end, "%H:%M").unwrap_or_else(|err| {
-        panic!("Parse end time error `{}`: {err:?}", args.time_end);
+    let time_end = chrono::NaiveTime::parse_from_str(&config.time_end, "%H:%M").unwrap_or_else(|err| {
+        panic!("Parse end time error `{}`: {err:?}", config.time_end);
     });
 
     let mut warned = String::from(""); // remember whether we already sent the warning
     loop {
-        match lister.list_windows(&args.user) {
+        match lister.list_windows(&config.user, &config.backend_path) {
             Ok(windows) => {
                 for win in windows {
                     add_to_apps(
-                        &args.user,
+                        &config.user,
                         &mut apps,
                         &apps_path,
                         win.pid,
                         &cmd_regex,
                         &title_regex,
                         &win.title,
-                        args.limit,
-                        args.warn_before,
+                        config.limit,
+                        config.warn_before,
                         &mut warned,
                         time_begin,
                         time_end
@@ -388,19 +382,12 @@ fn run_monitor(args: RunArgs) -> Result<()> {
         }
 
         // Wait before the next scan.
-        thread::sleep(Duration::from_secs(args.interval));
+        thread::sleep(Duration::from_secs(config.interval));
     }
 }
 
 fn show_time_used(args: TimeUsedArgs) -> Result<()> {
-    let apps_path = if args.apps_file.len() != 0 {
-        PathBuf::from(args.apps_file)
-    } else {
-        let mut home = dirs::state_dir().unwrap();
-        create_dir_all(&home)?;
-        home.push("parental-watchdog");
-        home
-    };
+    let apps_path = resolve_apps_path(&args.apps_path)?;
 
     let apps = load_apps(&apps_path)?;
     let total = sum_seconds_for_today(&apps);
@@ -409,11 +396,39 @@ fn show_time_used(args: TimeUsedArgs) -> Result<()> {
     Ok(())
 }
 
+fn show_time_remaining(args: TimeRemainingArgs) -> Result<()> {
+    let apps_path = resolve_apps_path(&args.apps_path)?;
+    let config_path = resolve_config_path(&args.config)?;
+
+    let apps = load_apps(&apps_path)?;
+    let config = load_config(&config_path)?;
+
+    let today_date = chrono::Local::now().date_naive();
+    let time_end = chrono::NaiveTime::parse_from_str(&config.time_end, "%H:%M").unwrap_or_else(|err| {
+        panic!("Parse end time error `{}`: {err:?}", config.time_end);
+    });
+    let today_end_epoch = today_date.and_time(time_end).and_local_timezone(chrono::Local).single().unwrap().timestamp();
+
+    let now_epoch = chrono::Local::now().timestamp();
+    let total = sum_seconds_for_today(&apps);
+
+    let remaining = if (today_end_epoch - now_epoch) < (config.limit - total) {
+        today_end_epoch - now_epoch
+    } else {
+        config.limit - total
+    };
+
+    println!("{}", fmt_time(remaining));
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
-        Commands::Run(run_args) => run_monitor(run_args),
-        Commands::TimeUsed(time_used_args) => show_time_used(time_used_args),
+        Commands::Run(args) => run_monitor(args),
+        Commands::TimeUsed(args) => show_time_used(args),
+        Commands::TimeRemaining(args) => show_time_remaining(args),
     }
 }

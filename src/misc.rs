@@ -1,7 +1,4 @@
-use std::{
-    io,
-    process::{Command, Stdio},
-};
+use std::{io, process::{Command, Stdio}};
 
 use anyhow::{Context, Result};
 use users::get_user_by_name;
