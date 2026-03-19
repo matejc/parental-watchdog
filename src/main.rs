@@ -412,11 +412,9 @@ fn show_time_remaining(args: TimeRemainingArgs) -> Result<()> {
     let now_epoch = chrono::Local::now().timestamp();
     let total = sum_seconds_for_today(&apps);
 
-    let remaining = if (today_end_epoch - now_epoch) < (config.limit - total) {
-        today_end_epoch - now_epoch
-    } else {
-        config.limit - total
-    };
+    let time_until_end = (today_end_epoch - now_epoch).max(0);
+    let limit_remaining = (config.limit - total).max(0);
+    let remaining = time_until_end.min(limit_remaining);
 
     println!("{}", fmt_time(remaining));
 
