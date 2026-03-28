@@ -108,10 +108,11 @@ impl WindowLister for XdotoolLister {
             backend_path
         };
 
-        let output = run_as_user(user, &[exec_path, "search", "--onlyvisible", "--name", "."]).unwrap_or_else(|e| {
-            eprintln!("failed to execute xdotool: {}", e);
-            String::default()
-        });
+        let output = run_as_user(user, &[exec_path, "search", "--onlyvisible", "--name", "."])
+            .unwrap_or_else(|e| {
+                eprintln!("failed to execute xdotool: {}", e);
+                String::default()
+            });
 
         let mut result = Vec::new();
         for win_id in output.lines() {

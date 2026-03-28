@@ -1,8 +1,19 @@
-user: kid
-limit: 7200
-warn_before: 900
-cmd_pattern: steamapps|PrismLauncher|.exe
-title_pattern: ^Sober$|YouTube
-backend: kdotool
-time_begin: 12:00
-time_end: 21:00
+default:
+  user: kid
+  limit: 7200
+  warn_before: 900
+  cmd_pattern: steamapps|PrismLauncher|\.exe
+  title_pattern: ^Sober$|YouTube
+  backend: kdotool
+  time_begin: 12:00
+  time_end: 21:00
+days:
+  Friday:
+    limit: 10800
+    time_end: 22:00
+  Saturday:
+    limit: 10800
+    time_begin: 9:00
+    time_end: 22:00
+  Sunday:
+    time_begin: 9:00

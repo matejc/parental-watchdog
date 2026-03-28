@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use regex::Regex;
 use std::{
     collections::HashMap,
-    fs::{self, File, create_dir_all},
+    fs::{self, create_dir_all, File},
     io::{BufRead, BufReader},
     path::PathBuf,
     process::Command,
@@ -12,7 +12,11 @@ use std::{
     time::Duration,
 };
 
-use crate::{backend::make_lister, config::load_config, misc::{fmt_time, run_command, send_stop_warning}};
+use crate::{
+    backend::make_lister,
+    config::load_config,
+    misc::{fmt_time, run_command, send_stop_warning},
+};
 pub mod backend;
 pub mod config;
 pub mod misc;
@@ -34,6 +38,8 @@ enum Commands {
     TimeUsed(TimeUsedArgs),
     /// Show time left for today
     TimeRemaining(TimeRemainingArgs),
+    /// Show effective configuration for today
+    ShowConfig(ConfigArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -63,6 +69,13 @@ struct TimeRemainingArgs {
     /// Path to the persistent apps file
     #[arg(long, short = 'a', default_value = "")]
     apps_path: String,
+}
+
+#[derive(Parser, Debug)]
+struct ConfigArgs {
+    /// Path to the YAML configuration file
+    #[arg(long, short = 'c')]
+    config: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -241,19 +254,34 @@ fn add_to_apps(
     let today = today_date.format("%Y-%m-%d").to_string();
     let now_epoch = chrono::Local::now().timestamp();
     let start_at = now_epoch.saturating_sub(seconds);
-    let today_begin_epoch = today_date.and_time(time_begin).and_local_timezone(chrono::Local).single().unwrap().timestamp();
-    let today_end_epoch = today_date.and_time(time_end).and_local_timezone(chrono::Local).single().unwrap().timestamp();
+    let today_begin_epoch = today_date
+        .and_time(time_begin)
+        .and_local_timezone(chrono::Local)
+        .single()
+        .unwrap()
+        .timestamp();
+    let today_end_epoch = today_date
+        .and_time(time_end)
+        .and_local_timezone(chrono::Local)
+        .single()
+        .unwrap()
+        .timestamp();
 
     if today_begin_epoch > now_epoch {
-        println!("Killing {pid}, before the begin time ({}): cmd='{comm}', title='{title}'", fmt_time(today_begin_epoch - now_epoch));
+        println!(
+            "Killing {pid}, before the begin time ({}): cmd='{comm}', title='{title}'",
+            fmt_time(today_begin_epoch - now_epoch)
+        );
         let _ = Command::new("kill")
             .arg("-TERM")
             .arg(pid.to_string())
             .status();
         return Ok(true);
-
     } else if now_epoch > today_end_epoch {
-        println!("Killing {pid}, after the end time ({}): cmd='{comm}', title='{title}'", fmt_time(now_epoch - today_end_epoch));
+        println!(
+            "Killing {pid}, after the end time ({}): cmd='{comm}', title='{title}'",
+            fmt_time(now_epoch - today_end_epoch)
+        );
         let _ = Command::new("kill")
             .arg("-TERM")
             .arg(pid.to_string())
@@ -287,14 +315,23 @@ fn add_to_apps(
         limit - total
     };
 
-    println!("App[{key} = {}]: Used {} out of {}, remaining {}", fmt_time(seconds_per_key), fmt_time(total), fmt_time(limit), fmt_time(remaining));
+    println!(
+        "App[{key} = {}]: Used {} out of {}, remaining {}",
+        fmt_time(seconds_per_key),
+        fmt_time(total),
+        fmt_time(limit),
+        fmt_time(remaining)
+    );
 
     // Warning / killing logic.
     if remaining < warn_before && *warned != today {
         send_stop_warning(user, remaining)?;
         *warned = today;
     } else if remaining < 0 {
-        println!("Killing {pid}, after {} reached: cmd='{comm}', title='{title}'", fmt_time(total));
+        println!(
+            "Killing {pid}, after {} reached: cmd='{comm}', title='{title}'",
+            fmt_time(total)
+        );
         // Fire SIGTERM; ignore errors (process may already be gone).
         let _ = Command::new("kill")
             .arg("-TERM")
@@ -309,7 +346,8 @@ fn resolve_apps_path(apps_path: &str) -> Result<PathBuf> {
     if !apps_path.is_empty() {
         Ok(PathBuf::from(apps_path))
     } else {
-        let mut home_state = dirs::state_dir().ok_or_else(|| anyhow::anyhow!("Could not determine state directory"))?;
+        let mut home_state = dirs::state_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine state directory"))?;
         create_dir_all(&home_state)?;
         home_state.push("parental-watchdog");
         Ok(home_state)
@@ -320,7 +358,8 @@ fn resolve_config_path(config_path: &str) -> Result<PathBuf> {
     if !config_path.is_empty() {
         Ok(PathBuf::from(config_path))
     } else {
-        let mut home_config = dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+        let mut home_config = dirs::config_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
         home_config.push("parental-watchdog");
         home_config.push("config.yaml");
         Ok(home_config)
@@ -329,36 +368,37 @@ fn resolve_config_path(config_path: &str) -> Result<PathBuf> {
 
 fn run_monitor(args: RunArgs) -> Result<()> {
     let config_path = resolve_config_path(&args.config)?;
-    let config = load_config(&config_path)?;
-
-    let lister = make_lister(config.backend);
-
     let apps_path = resolve_apps_path(&args.apps_path)?;
 
     // Load existing data.
     let mut apps = load_apps(&apps_path)?;
 
-    let cmd_regex: Option<Regex> = config.cmd_pattern.as_ref().map(|pat| {
-        Regex::new(pat).unwrap_or_else(|err| {
-            panic!("Problem compiling cmd pattern `{}`: {err:?}", pat);
-        })
-    });
-    let title_regex: Option<Regex> = config.title_pattern.as_ref().map(|pat| {
-        Regex::new(pat).unwrap_or_else(|err| {
-            panic!("Problem compiling title pattern `{}`: {err:?}", pat);
-        })
-    });
-
-    let time_begin = chrono::NaiveTime::parse_from_str(&config.time_begin, "%H:%M").unwrap_or_else(|err| {
-        panic!("Parse begin time error `{}`: {err:?}", config.time_begin);
-    });
-
-    let time_end = chrono::NaiveTime::parse_from_str(&config.time_end, "%H:%M").unwrap_or_else(|err| {
-        panic!("Parse end time error `{}`: {err:?}", config.time_end);
-    });
-
     let mut warned = String::from(""); // remember whether we already sent the warning
     loop {
+        let config = load_config(&config_path)?;
+        let lister = make_lister(config.backend.clone());
+
+        let cmd_regex: Option<Regex> = config.cmd_pattern.as_ref().map(|pat| {
+            Regex::new(pat).unwrap_or_else(|err| {
+                panic!("Problem compiling cmd pattern `{}`: {err:?}", pat);
+            })
+        });
+        let title_regex: Option<Regex> = config.title_pattern.as_ref().map(|pat| {
+            Regex::new(pat).unwrap_or_else(|err| {
+                panic!("Problem compiling title pattern `{}`: {err:?}", pat);
+            })
+        });
+
+        let time_begin = chrono::NaiveTime::parse_from_str(&config.time_begin, "%H:%M")
+            .unwrap_or_else(|err| {
+                panic!("Parse begin time error `{}`: {err:?}", config.time_begin);
+            });
+
+        let time_end =
+            chrono::NaiveTime::parse_from_str(&config.time_end, "%H:%M").unwrap_or_else(|err| {
+                panic!("Parse end time error `{}`: {err:?}", config.time_end);
+            });
+
         match lister.list_windows(&config.user, &config.backend_path) {
             Ok(windows) => {
                 for win in windows {
@@ -374,7 +414,7 @@ fn run_monitor(args: RunArgs) -> Result<()> {
                         config.warn_before,
                         &mut warned,
                         time_begin,
-                        time_end
+                        time_end,
                     )?;
                 }
             }
@@ -404,10 +444,16 @@ fn show_time_remaining(args: TimeRemainingArgs) -> Result<()> {
     let config = load_config(&config_path)?;
 
     let today_date = chrono::Local::now().date_naive();
-    let time_end = chrono::NaiveTime::parse_from_str(&config.time_end, "%H:%M").unwrap_or_else(|err| {
-        panic!("Parse end time error `{}`: {err:?}", config.time_end);
-    });
-    let today_end_epoch = today_date.and_time(time_end).and_local_timezone(chrono::Local).single().unwrap().timestamp();
+    let time_end =
+        chrono::NaiveTime::parse_from_str(&config.time_end, "%H:%M").unwrap_or_else(|err| {
+            panic!("Parse end time error `{}`: {err:?}", config.time_end);
+        });
+    let today_end_epoch = today_date
+        .and_time(time_end)
+        .and_local_timezone(chrono::Local)
+        .single()
+        .unwrap()
+        .timestamp();
 
     let now_epoch = chrono::Local::now().timestamp();
     let total = sum_seconds_for_today(&apps);
@@ -421,6 +467,15 @@ fn show_time_remaining(args: TimeRemainingArgs) -> Result<()> {
     Ok(())
 }
 
+fn show_config(args: ConfigArgs) -> Result<()> {
+    let config_path = resolve_config_path(&args.config)?;
+    let config = load_config(&config_path)?;
+
+    println!("{}", serde_yaml::to_string(&config)?);
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -428,5 +483,6 @@ fn main() -> Result<()> {
         Commands::Run(args) => run_monitor(args),
         Commands::TimeUsed(args) => show_time_used(args),
         Commands::TimeRemaining(args) => show_time_remaining(args),
+        Commands::ShowConfig(args) => show_config(args),
     }
 }
