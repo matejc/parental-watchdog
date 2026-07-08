@@ -36,16 +36,20 @@ For now this is not automated
 
 ```bash
 sudo cp -v ./target/release/parental-watchdog /usr/bin/
+sudo mkdir /etc/parental-watchdog  # for config files
+sudo cp -v ./examples/config.yaml /etc/parental-watchdog/kid.yaml
+sudo mkdir /var/lib/parental-watchdog  # for state files
 ```
 
-Edit the `parental-watchdog.service` file to at least change username and patterns (current patterns should match Steam, Heroic, Minecraft via PrismLauncher, Sober and YouTube in the title - internet browser window).
+Edit the `/etc/parental-watchdog/kid.yaml` file to at least change username and patterns (current patterns should match Steam, Heroic, Minecraft via PrismLauncher, Sober and YouTube in the title - internet browser window).
+Edit the `parental-watchdog-kid.service` if you changed the config file name.
 
 ```bash
-sudo systemctl enable --now ./examples/parental-watchdog.service
+sudo systemctl enable --now ./examples/parental-watchdog-kid.service
 ```
 
 Note:
-- For subsequent edits of the `./examples/parental-watchdog.service`, make sure that you run `sudo systemctl daemon-reload` so that the systemd reloads the file and then you need to restart the service manually via `sudo systemctl restart parental-watchdog.service`
+- For subsequent edits of the `parental-watchdog-kid.service`, make sure that you run `sudo systemctl daemon-reload` so that the systemd reloads the file and then you need to restart the service manually via `sudo systemctl restart parental-watchdog.service`
 
 
 ## Usage
@@ -53,26 +57,23 @@ Note:
 ```
 Monitor processes/windows belonging to a given user, accumulate run‑time, warn before a configurable limit and eventually terminate the process
 
-Usage: parental-watchdog [OPTIONS] --user <USER> <--cmd-pattern <REGEX>|--title-pattern <REGEX>>
+Usage: parental-watchdog <COMMAND>
+
+Commands:
+  run             Run the parental watchdog monitor
+  time-used       Show time used for today
+  time-remaining  Show time left for today
+  show-config     Show effective configuration for today
+  help            Print this message or the help of the given subcommand(s)
 
 Options:
-  -u, --user <USER>                Username that owns the graphical session (mandatory)
-      --limit <LIMIT>              Hard time‑limit in seconds (default 7200 ≈ 2 h) [default: 7200]
-      --warn-before <WARN_BEFORE>  Seconds before the limit when a warning is shown (default 900 ≈ 15 min) [default: 900]
-      --interval <INTERVAL>        Interval between scans, in seconds [default: 10]
-  -f, --apps-file <APPS_FILE>      Path to the persistent apps file (default $HOME/.local/state/parental-watchdog) [default: ]
-      --cmd-pattern <REGEX>        Regex that must match the command name
-      --title-pattern <REGEX>      Regex that must match the window title
-  -b, --backend <BACKEND>          Which backend to use: "kdotool", "niri" or "xdotool" [default: kdotool] [possible values: kdotool, niri, xdotool]
-      --time-begin <TIME_BEGIN>    Begin time for the day (outside of the begin and end time, windows with patterns will be terminated immediately) [default: 12:00]
-      --time-end <TIME_END>        End time for the day [default: 21:00]
-  -h, --help                       Print help
-  -V, --version                    Print version
+  -h, --help     Print help
+  -V, --version  Print version
 ```
 
 ## Develop
 
 ```
 nix-shell
-cargo run -- --user $USER --cmd-pattern '^some-example$|somethingelse'  # Example command
+cargo run -- run -c ./examples/config.yaml -a /tmp/parental-watchdog-kid  # Example command
 ```
