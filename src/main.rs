@@ -15,7 +15,7 @@ use std::{
 use crate::{
     backend::make_lister,
     config::load_config,
-    misc::{fmt_time, run_command, send_stop_warning},
+    misc::{fmt_time, send_stop_warning},
 };
 pub mod backend;
 pub mod config;
@@ -208,26 +208,31 @@ fn add_to_apps(
     time_begin: NaiveTime,
     time_end: NaiveTime,
 ) -> Result<bool> {
-    // Retrieve process info via `ps`.
-    let ps_out = run_command(
-        "ps",
-        &[
+    if pid == 0 || pid > i32::MAX as u32 {
+        return Ok(false);
+    }
+    let ps_output = Command::new("ps")
+        .args([
             "--no-headers",
             "-p",
             &pid.to_string(),
             "-o",
             "etimes,comm,command",
-        ],
-    )?;
+        ])
+        .output()?;
+    if !ps_output.status.success() {
+        return Ok(false);
+    }
+    let ps_out = String::from_utf8_lossy(&ps_output.stdout);
 
     // Example: "1234 bash /bin/bash -c …"
     let mut parts = ps_out.split_whitespace();
-    let secs_str = parts
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing etimes from ps output"))?;
-    let comm = parts
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing comm from ps output"))?;
+    let Some(secs_str) = parts.next() else {
+        return Ok(false);
+    };
+    let Some(comm) = parts.next() else {
+        return Ok(false);
+    };
     let command: String = parts.collect::<Vec<_>>().join(" ");
     // The rest of the command line is ignored for our matching needs.
     let seconds: i64 = secs_str.parse()?;

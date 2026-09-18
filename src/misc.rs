@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
-    io,
-    process::{Command, Stdio},
+    process::Command,
 };
 
 use anyhow::{Context, Result};
@@ -75,21 +74,4 @@ pub fn send_stop_warning(user: &str, remaining: i64) -> Result<()> {
     println!("Sending warning: '{msg}' ...");
     run_as_user(user, &[NOTIFY_SEND_CMD, &msg])?;
     Ok(())
-}
-
-pub fn run_command(cmd: &str, args: &[&str]) -> io::Result<String> {
-    let output = Command::new(cmd)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .output()?;
-
-    if !output.status.success() {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("command `{}` exited with status {}", cmd, output.status),
-        ))
-    } else {
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    }
 }
